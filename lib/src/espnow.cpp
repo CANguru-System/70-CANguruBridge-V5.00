@@ -67,6 +67,7 @@ void cpySlaveInfo(slaveInfoStruct dest, slaveInfoStruct source)
 // ESPNow wird initialisiert
 void espInit()
 {
+  cntConfig = 0;
   slaveCnt = 0;
   slaveCurr = 0;
   gate.isType = false;
@@ -149,11 +150,6 @@ bool get_sendLokBuffer()
   return tmp;
 }
 
-// setzt die Variable cntConfig auf Null
-void set_cntConfig()
-{
-  cntConfig = 0;
-}
 
 // fordert einen Slave dazu auf, Anfangsdaten bekannt zu geben
 void set_initialData2send(uint8_t slave)
@@ -432,6 +428,7 @@ void printESPNowError(esp_err_t Result)
 }
 
 // sendet daten über ESPNow
+// der slave wird mit der nummer angesprochen, die sich durch die Reihenfolge beim Erkennen (scannen) ergibt 
 void sendTheData(uint8_t slave, const uint8_t *data, size_t len)
 {
   esp_err_t sendResult = esp_now_send(slaveInfo[slave].slave.peer_addr, data, len);

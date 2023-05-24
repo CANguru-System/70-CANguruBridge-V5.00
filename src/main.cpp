@@ -14,6 +14,13 @@
 uint8_t M_PATTERN[] = {0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
 const uint8_t maxPackets = 30;
+bool bLokDiscovery;
+
+bool locofileread;
+bool initialDataAlreadySent;
+byte locid;
+
+canguruETHClient telnetClient;
 
 //
 void printCANFrame(uint8_t *buffer, CMD dir)
@@ -66,6 +73,12 @@ void setup_can_driver()
     while (1)
       delay(10);
   }
+}
+
+void printMSG(uint8_t no)
+{
+  uint8_t MSG[] = {0x00, no, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  sendOutGW(MSG, MSGfromBridge);
 }
 
 // ein CAN-Frame wird erzeugt, der Parameter noFrame gibt an, welche Daten
@@ -295,10 +308,35 @@ void setup() {
   initDisplayLCD28();
   // noch nicht nach Slaves scannen
   set_time4Scanning(false);
-  // der Timer wird initialisiert
+  // der Timer für das Blinken wird initialisiert
   stillAliveBlinkSetup();
   // start the CAN bus at 250 kbps
   setup_can_driver();
+  // ESPNow wird initialisiert
+  // Variablen werden auf Anfangswerte gesetzt und die Routinen für das Senden
+  // und Empfangen über ESNOW werden registriert
+  espInit();
+  // die Routine für die Statusmeldungen des WiFi wird registriert 
+  wifi_event_id_t inet_evt_hnd = WiFi.onEvent(iNetEvtCB);
+  // das gleiche mit ETHERNET
+  ETH.begin();
+  // das Zugprogramm (WDP) wurde noch nicht erkannt
+  set_SYSseen(false);
+  
+  // Variablen werden gesetzt
+  bLokDiscovery = false;
+  locofileread = false;
+  initialDataAlreadySent = false;
+  locid = 1;
+  // start the telnetClient
+  telnetClient.telnetInit();
+}
+
+// Meldung, dass SYS gestartet werden kann
+void goSYS()
+{
+  printMSG(StartTrainApplication);
+  drawCircle = true;
 }
 
 void loop() {
