@@ -77,18 +77,18 @@ AsyncWebServerRequest *arrayRequest[maxPackets] = {};
 // die Portadressen; 15730 und 15731 sind von Märklin festgelegt
 // OUT is even
 const unsigned int localPortDelta = 2;                                // local port to listen on
-const unsigned int localPortoutSYS = 15730;                           // local port to send on
-const unsigned int localPortinSYS = 15731;                            // local port to listen on
-const unsigned int localPortoutGW = localPortoutSYS + localPortDelta; // local port to send on
-const unsigned int localPortinGW = localPortinSYS + localPortDelta;   // local port to listen on
+const unsigned int localPortToWDP = 15730;                           // local port to send on
+const unsigned int localPortFromWDP = 15731;                            // local port to listen on
+const unsigned int localPortToServer = localPortToWDP + localPortDelta; // local port to send on
+const unsigned int localPortFromServer = localPortFromWDP + localPortDelta;   // local port to listen on
 
 // create UDP instance
 //  EthernetUDP instances to let us send and receive packets over UDP
-WiFiUDP UdpOUTSYS;
-WiFiUDP UdpOUTGW;
+WiFiUDP UDPToWDP;
+WiFiUDP UDPToServer;
 
-WiFiUDP UdpINSYS;
-WiFiUDP UdpINGW;
+WiFiUDP UDPFromWDP;
+WiFiUDP UDPFromServer;
 
 WiFiClient TCPclient;
 
@@ -98,7 +98,7 @@ IPAddress ipGateway;
 const unsigned int httpPort = 80;
 AsyncWebServer AsyncWebSrvr(httpPort);
 
-WiFiServer TCPINSYS(localPortinSYS);
+WiFiServer TCPINSYS(localPortFromWDP);
 
 // events
 //*********************************************************************************************************
@@ -121,7 +121,6 @@ void iNetEvtCB(arduino_event_id_t event, arduino_event_info_t info)
     displayLCD("");
     displayLCD("Connect!");
     Serial.println(F("Connect!")); // %%
-                                   //    setEthStatus(true);
     break;
   case ARDUINO_EVENT_ETH_DISCONNECTED: // SYSTEM_EVENT_ETH_DISCONNECTED:
     displayLCD("ETHERNET Disconnected");
@@ -146,7 +145,7 @@ void timer1s()
   {
     if (secs > (maxDevices / 2))
     {
-      set_time4Scanning(false);
+      startOrStopScanning(false);
       produceFrame(M_CAN_PING);
       proc2CAN(M_PATTERN, toClnt);
       sendOutTCP(M_PATTERN);
@@ -193,6 +192,9 @@ void stillAliveBlinkSetup()
 // Initialdaten sind bsplw. die anfängliche Stellung der Weichen, Signale oder
 // Gleisbesetztmelder; anschließend gibt es eine Wartezeit, die für die einzelnen
 // Decodertypen unterschiedlich lang ist
+//
+// die Variable currStatus gibt an, ob die Status-LED auf dem Decoder an oder aus ist
+// und wird durch den 1 Sek-Timer umgeschaltet, verschickt wird sie dann von dieser Routine
 void stillAliveBlinking()
 {
   static uint8_t slv = 0;

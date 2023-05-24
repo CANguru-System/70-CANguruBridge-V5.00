@@ -77,7 +77,7 @@ void espInit()
   initVariant();
   if (esp_now_init() == ESP_OK)
   {
-    displayLCD("ESP_Now started!");
+      displayLCD("ESPNow started!");
   }
   else
   {
@@ -88,7 +88,7 @@ void espInit()
 }
 
 // schaltet den Prozess Scan4Slaves() ein oder aus
-void set_time4Scanning(bool t4s)
+void startOrStopScanning(bool t4s)
 {
   time4Scanning = t4s;
 }
@@ -266,9 +266,9 @@ void initVariant()
   WiFi.mode(WIFI_MODE_STA);
   esp_err_t setMacResult = esp_wifi_set_mac((wifi_interface_t)ESP_IF_WIFI_STA, &masterCustomMac[0]);
   if (setMacResult == ESP_OK)
-    displayLCD("Init Variant ok!");
+    log_e("Init Variant ok!");
   else
-    displayLCD("Init Variant failed!");
+    log_e("Init Variant failed!");
   WiFi.disconnect();
 }
 
@@ -512,7 +512,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
         setAmpere(i - 0x05, data[i]);
       }
 
-      displayLCD("ESP_Now started!");
+      displayLCD("ESPNow started!");
       break;
     default:
       // send received data via Ethernet to GW and evtl to SYS

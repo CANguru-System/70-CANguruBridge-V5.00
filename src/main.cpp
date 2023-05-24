@@ -65,7 +65,7 @@ void setup_can_driver()
 
   if (error == ESP32CAN_OK)
   {
-    displayLCD("CAN is running!");
+    displayLCD("CAN started!");
   }
   else
   {
@@ -227,15 +227,15 @@ void sendOutGW(uint8_t *buffer, CMD cmd)
 {
   //%
 /*  buffer[0] = cmd;
-  UdpOUTGW.beginPacket(ipGateway, localPortoutGW);
-  UdpOUTGW.write(buffer, CAN_FRAME_SIZE);
-  UdpOUTGW.endPacket();
+  UDPToServer.beginPacket(ipGateway, localPortoutGW);
+  UDPToServer.write(buffer, CAN_FRAME_SIZE);
+  UDPToServer.endPacket();
   buffer[0] = 0x00;*/
 }
 
 void msgStartScanning()
 {
-//  telnetClient.printTelnet(true, "Start scanning for slaves ... ", 0);
+  telnetClient.printTelnet(true, "Start scanning for slaves ... ", 0);
 }
 
 // sendet einen CAN-Frame an den Teilnehmer und gibt ihn anschließend aus
@@ -254,17 +254,17 @@ void sendOutTCPfromCAN(uint8_t *buffer)
 
 void sendOutUDP(uint8_t *buffer)
 {
-/*  UdpOUTSYS.beginPacket(ipGateway, localPortoutSYS);
-  UdpOUTSYS.write(buffer, CAN_FRAME_SIZE);
-  UdpOUTSYS.endPacket();
+/*  UDPToWDP.beginPacket(ipGateway, localPortoutSYS);
+  UDPToWDP.write(buffer, CAN_FRAME_SIZE);
+  UDPToWDP.endPacket();
   printCANFrame(buffer, toUDP);*/
 }
 
 void sendOutUDPfromCAN(uint8_t *buffer)
 {
-/*  UdpOUTSYS.beginPacket(ipGateway, localPortoutSYS);
-  UdpOUTSYS.write(buffer, CAN_FRAME_SIZE);
-  UdpOUTSYS.endPacket();*/
+/*  UDPToWDP.beginPacket(ipGateway, localPortoutSYS);
+  UDPToWDP.write(buffer, CAN_FRAME_SIZE);
+  UDPToWDP.endPacket();*/
 }
 
 void sendOutClnt(uint8_t *buffer, CMD dir)
@@ -307,7 +307,7 @@ void setup() {
   // das Display wird initalisiert
   initDisplayLCD28();
   // noch nicht nach Slaves scannen
-  set_time4Scanning(false);
+  startOrStopScanning(false);
   // der Timer für das Blinken wird initialisiert
   stillAliveBlinkSetup();
   // start the CAN bus at 250 kbps
@@ -330,6 +330,26 @@ void setup() {
   locid = 1;
   // start the telnetClient
   telnetClient.telnetInit();
+  // This initializes udp and transfer buffer
+  if (UDPFromWDP.begin(localPortFromWDP) == 0)
+  {
+    displayLCD("ERROR From WDP");
+  }
+  if (UDPFromServer.begin(localPortFromServer) == 0)
+  {
+    displayLCD("ERROR To WDP");
+  }
+  if (UDPToServer.begin(localPortToServer) == 0)
+  {
+    displayLCD("ERROR To Server");
+  }
+  if (UDPToWDP.begin(localPortToWDP) == 0)
+  {
+    displayLCD("ERROR From Server");
+  }
+  // start the TCP-server
+  TCPINSYS.begin();
+  //
 }
 
 // Meldung, dass SYS gestartet werden kann
@@ -339,6 +359,105 @@ void goSYS()
   drawCircle = true;
 }
 
+// die Routin antwortet auf die Anfrage des CANguru-Servers mit CMD 0x88;
+// damit erhält er die IP-Adresse der CANguru-Bridge und kann dann
+// damit eine Verbindung aufbauen
+void proc_IP2GW()
+{
+  uint8_t UDPbuffer[CAN_FRAME_SIZE]; // buffer to hold incoming packet,
+  if (telnetClient.getIsipBroadcastSet())
+    return;
+  yield();
+  int packetSize = UDPFromServer.parsePacket();
+  // if there's data available, read a packet
+  if (packetSize)
+  {
+    // read the packet into packetBuffer
+    UDPFromServer.read(UDPbuffer, CAN_FRAME_SIZE);
+    // send received data via ETHERNET
+    log_e("IP2GW: %X", UDPbuffer[0x01]);
+    switch (UDPbuffer[0x1])
+    {
+    case CALL4CONNECT:
+      log_e("IP2GWX CANguru-Server connected");
+      setEthStatus(true);
+      ipGateway = telnetClient.setipBroadcast(UDPFromServer.remoteIP());
+      UDPbuffer[0x1]++;
+      sendOutGW(UDPbuffer, toGW);
+      break;
+    }
+  }
+}
+
+void proc_start_lokBuffer()
+{
+  //  log_e("proc_start_lokBuffer");
+  produceFrame(M_CNTLOKBUFFER);
+  sendOutGW(M_PATTERN, toGW);
+}
+
+// damit wird die Gleisbox zum Leben erweckt
+void send_start_60113_frames()
+{
+  produceFrame(M_GLEISBOX_MAGIC_START_SEQUENCE);
+  proc2CAN(M_PATTERN, toCAN);
+  produceFrame(M_GLEISBOX_ALL_PROTO_ENABLE);
+  proc2CAN(M_PATTERN, toCAN);
+}
+
+// Start des Telnet-Servers
+void startTelnetserver()
+{
+  if (telnetClient.startTelnetSrv())
+  {
+    //    log_e("startTelnetserver");
+    delay(5);
+    send_start_60113_frames();
+    // erstes PING soll schnell kommen
+    secs = wait_for_ping;
+    startOrStopScanning(true);
+  }
+}
+
+void startProcedures()
+{
+  static bool b1 = true;
+  static bool b2 = true;
+  static bool b3 = true;
+  static bool b4 = true;
+  if ((b1 || b2 || b3 || b4) == true)
+  {
+    if (!telnetClient.getTelnetHasConnected())
+    {
+      startTelnetserver();
+      b1 = !telnetClient.getTelnetHasConnected();
+    }
+    if (b2 == true)
+    {
+//      proc_startTCPServer();
+      b2 = false;
+    }
+    if (get_sendLokBuffer())
+    {
+//      proc_start_lokBuffer();
+      b3 = false;
+    }
+    if (get_gotPINGmsg())
+    {
+//      proc_PING();
+      b4 = false;
+    }
+  }
+}
+
 void loop() {
-  // put your main code here, to run repeatedly:
+  // die folgenden Routinen werden ständig aufgerufen
+  stillAliveBlinking();
+  espNowProc();
+  proc_IP2GW();
+  if (getEthStatus() == true)
+  {
+    // diese nur nach Aufbau der ETHERNET-Verbindung
+    startProcedures();
+  }
 }

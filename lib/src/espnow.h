@@ -127,7 +127,7 @@ uint8_t matchUID(uint8_t *buffer);
 // ESPNow wird initialisiert
 void espInit();
 // schaltet den Prozess Scan4Slaves() ein oder aus
-void set_time4Scanning(bool t4s);
+void startOrStopScanning(bool t4s);
 // gibt an, ob der Prozess Scan4Slaves() läuft oder nicht
 bool get_time4Scanning();
 // schaltet den Prozess waiting4Handshake ein oder aus; nach dem Erfassen der Slaves
@@ -163,8 +163,6 @@ bool get_gotPINGmsg();
 void set_gotPINGmsg(bool ping);
 // gibt an, ob ein sendLokBuffer zu senden ist
 bool get_sendLokBuffer();
-// setzt die Variable cntConfig auf Null
-void set_cntConfig();
 // fordert einen Slave dazu auf, Anfangsdaten bekannt zu geben
 void set_initialData2send(uint8_t slave);
 // quittiert, dass Anfangsdaten übertragen wurden
