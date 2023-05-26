@@ -38,7 +38,6 @@ struct slaveInfoStruct
   esp_now_peer_info_t slave;
   esp_now_peer_info_t *peer;
   bool initialData2send;
-  bool gotHandshake;
   uint8_t no;
   uint8_t decoderType;
 };
@@ -102,7 +101,7 @@ enum CMD
   fromCAN2TCP,
   fromGW2Clnt,
   /*14*/ fromGW2CAN,
-  toGW,
+  toServer,
   X0,
   MSGfromBridge
 };
@@ -126,15 +125,6 @@ void setAmpere(uint8_t i, uint8_t d);
 uint8_t matchUID(uint8_t *buffer);
 // ESPNow wird initialisiert
 void espInit();
-// schaltet den Prozess Scan4Slaves() ein oder aus
-void startOrStopScanning(bool t4s);
-// gibt an, ob der Prozess Scan4Slaves() läuft oder nicht
-bool get_time4Scanning();
-// schaltet den Prozess waiting4Handshake ein oder aus; nach dem Erfassen der Slaves
-// gibt es einen abschließenden Handshake mit jedem Slave
-void set_waiting4Handshake(bool w4s);
-// gibt an, ob der Prozess waiting4Handshake läuft oder nicht
-bool get_waiting4Handshake();
 // Kommunikationsroutine zu den CAN-Komponenten (momentan nur die Gleisbox)
 void proc2CAN(uint8_t *buffer, CMD dir);
 // Laden der lokomotive.cs2-Datei
@@ -142,11 +132,11 @@ void reveiveLocFile();
 // Übertragung von Frames zum CANguru-Server zur dortigen Ausgabe
 void printUDPCAN(uint8_t *buffer, CMD dir);
 // Ausgaberoutine
-void sendOutUDP(uint8_t *buffer);
+void sendToWDP(uint8_t *buffer);
 // Ausgaberoutine
 void sendOutTCP(uint8_t *buffer);
 // Ausgaberoutine
-void sendOutGW(uint8_t *buffer, CMD cmd);
+void sendToServer(uint8_t *buffer, CMD cmd);
 // Zeigt an, dass die Suche nach Decodern begonnen hat
 void msgStartScanning();
 // Anzeige, dass SYS gestartet werden kabb
@@ -157,10 +147,6 @@ uint8_t get_slaveCnt();
 bool get_SYSseen();
 // setzt, dass SYS gestartet ist
 void set_SYSseen(bool SYS);
-// gibt an, ob ein PING empfangen wurde
-bool get_gotPINGmsg();
-// setzt, dass 
-void set_gotPINGmsg(bool ping);
 // gibt an, ob ein sendLokBuffer zu senden ist
 bool get_sendLokBuffer();
 // fordert einen Slave dazu auf, Anfangsdaten bekannt zu geben
@@ -178,7 +164,7 @@ slaveInfoStruct get_slaveInfo(uint8_t slave);
 // gibt eine MAC-Adresse aus
 void printMac(uint8_t m[macLen]);
 // vergleicht zwei MAC-Adressen
-bool macIsEqual(uint8_t m0[macLen], uint8_t m1[macLen]);
+bool macIsEqual(const uint8_t m0[macLen], const uint8_t m1[macLen]);
 // Scannt nach Slaves
 void Scan4Slaves();
 // setzt die vorgegebene MAC-Adresse des Masters
@@ -186,7 +172,7 @@ void initVariant();
 // addiert und registriert gefundene Slaves
 void addSlaves();
 // steuert den Registrierungsprozess der Slaves
-void espNowProc();
+void registerSlaves();
 // sendet daten über ESPNow
 void sendTheData(const uint8_t slave, const uint8_t *data, size_t len);
 // nach dem Versand von Meldungen können hier Fehlermeldungen abgerufen werden

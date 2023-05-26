@@ -18,8 +18,6 @@
 
 uint8_t slaveCnt;
 uint8_t slaveCurr;
-bool time4Scanning = false;
-bool waiting4Handshake;
 decoderStruct gate;
 
 // willkürlich festgelegte MAC-Adresse
@@ -30,7 +28,6 @@ slaveInfoStruct tmpSlaveInfo;
 esp_now_peer_info_t cand;
 String ssidSLV = "CNgrSLV";
 
-bool gotPINGmsg;
 bool bSendLokBuffer;
 bool SYSseen;
 uint8_t cntConfig;
@@ -59,7 +56,6 @@ void cpySlaveInfo(slaveInfoStruct dest, slaveInfoStruct source)
   dest.slave = source.slave;
   dest.peer = source.peer;
   dest.initialData2send = source.initialData2send;
-  dest.gotHandshake = source.gotHandshake;
   dest.no = source.no;
   dest.decoderType = source.decoderType;
 }
@@ -71,13 +67,11 @@ void espInit()
   slaveCnt = 0;
   slaveCurr = 0;
   gate.isType = false;
-  waiting4Handshake = true;
-  gotPINGmsg = false;
   bSendLokBuffer = false;
   initVariant();
   if (esp_now_init() == ESP_OK)
   {
-      displayLCD("ESPNow started!");
+    displayLCD("ESPNow started!");
   }
   else
   {
@@ -85,31 +79,6 @@ void espInit()
   }
   esp_now_register_send_cb(OnDataSent);
   esp_now_register_recv_cb(OnDataRecv);
-}
-
-// schaltet den Prozess Scan4Slaves() ein oder aus
-void startOrStopScanning(bool t4s)
-{
-  time4Scanning = t4s;
-}
-
-// gibt an, ob der Prozess Scan4Slaves() läuft oder nicht
-bool get_time4Scanning()
-{
-  return time4Scanning;
-}
-
-// schaltet den Prozess waiting4Handshake ein oder aus; nach dem Erfassen der Slaves
-// gibt es einen abschließenden Handshake mit jedem Slave
-void set_waiting4Handshake(bool w4s)
-{
-  waiting4Handshake = w4s;
-}
-
-// gibt an, ob der Prozess waiting4Handshake läuft oder nicht
-bool get_waiting4Handshake()
-{
-  return waiting4Handshake;
 }
 
 // gibt die Anzahl der gefundenen Slaves zurück
@@ -130,18 +99,6 @@ void set_SYSseen(bool SYS)
   SYSseen = SYS;
 }
 
-// gibt an, ob ein PING empfangen wurde
-bool get_gotPINGmsg()
-{
-  return gotPINGmsg;
-}
-
-// setzt, dass
-void set_gotPINGmsg(bool ping)
-{
-  gotPINGmsg = ping;
-}
-
 // gibt an, ob ein sendLokBuffer zu senden ist
 bool get_sendLokBuffer()
 {
@@ -149,7 +106,6 @@ bool get_sendLokBuffer()
   bSendLokBuffer = false;
   return tmp;
 }
-
 
 // fordert einen Slave dazu auf, Anfangsdaten bekannt zu geben
 void set_initialData2send(uint8_t slave)
@@ -189,7 +145,7 @@ void printMac(uint8_t m[macLen])
 }
 
 // vergleicht zwei MAC-Adressen
-bool macIsEqual(uint8_t m0[macLen], uint8_t m1[macLen])
+bool macIsEqual(const uint8_t m0[macLen], const uint8_t m1[macLen])
 {
   for (uint8_t ii = 0; ii < macLen; ++ii)
   {
@@ -248,7 +204,6 @@ void Scan4Slaves()
           slaveInfo[slaveCnt].slave.channel = WIFI_CHANNEL;
           slaveInfo[slaveCnt].slave.encrypt = 0;
           slaveInfo[slaveCnt].peer = &slaveInfo[slaveCnt].slave;
-          slaveInfo[slaveCnt].gotHandshake = false;
           slaveInfo[slaveCnt].initialData2send = false;
           slaveInfo[slaveCnt].no = slaveCnt;
           slaveCnt++;
@@ -320,72 +275,26 @@ void addSlaves()
   {
     printMac(slaveInfo[s].slave.peer_addr);
     char chs[30];
-    sprintf(chs, " -- Added Slave %d", s + 1);
+    sprintf(chs, " -- Added Slave %d\r\n", s + 1);
     displayLCD(chs);
   }
 }
 
 // steuert den Registrierungsprozess der Slaves
-void espNowProc()
+void registerSlaves()
 {
-  if (time4Scanning == true)
-  {
-    Scan4Slaves();
-  }
-  if (time4Scanning == false && slaveCnt > 0 && waiting4Handshake == true)
+  if (slaveCnt > 0)
   {
     // add slaves
     addSlaves();
-    uint8_t Clntbuffer[CAN_FRAME_SIZE]; // buffer to hold incoming packet,
-    for (uint8_t s = 0; s < slaveCnt; s++)
-    {
-      for (uint8_t cnt = 0; cnt < macLen; cnt++)
-        Clntbuffer[cnt] = slaveInfo[s].slave.peer_addr[cnt];
-      // device-Nummer übermitteln
-      Clntbuffer[macLen] = s;
-      sendTheData(s, Clntbuffer, macLen + 1);
-    }
     delay(50);
-  }
-}
-
-// Überprüft, ob alle Slaves erkannt wurden und macht dann das Handshaking
-void AllSlavesOnboard(const uint8_t *data, int data_len)
-{
-  if (data_len == macLen)
-  {
-    uint8_t d[macLen];
-    for (uint8_t cnt = 0; cnt < data_len; cnt++)
-    {
-      d[cnt] = data[cnt];
-    }
-    for (uint8_t s = 0; s < slaveCnt; s++)
-    {
-      if (macIsEqual(slaveInfo[s].slave.peer_addr, d) == true)
-      {
-        slaveInfo[s].gotHandshake = true;
-        break;
-      }
-    }
-    bool handshakeFinished = true;
-    for (uint8_t s = 0; s < slaveCnt; s++)
-    {
-      if (slaveInfo[s].gotHandshake == false)
-      {
-        handshakeFinished = false;
-        break;
-      }
-    }
-    if (handshakeFinished == true)
-    {
-      waiting4Handshake = false;
-      char chs[30];
-      int sc = slaveCnt;
-      sprintf(chs, "%d slave(s) on board!", sc);
-      displayLCD(chs);
-      delay(500);
-      clearDisplay();
-    }
+    // alle slaves sind bekannt
+    char chs[30];
+    int sc = slaveCnt;
+    sprintf(chs, "%d slave(s) found!\r\n", sc);
+    displayLCD(chs);
+    delay(5000);
+    clearDisplay();
   }
 }
 
@@ -428,7 +337,7 @@ void printESPNowError(esp_err_t Result)
 }
 
 // sendet daten über ESPNow
-// der slave wird mit der nummer angesprochen, die sich durch die Reihenfolge beim Erkennen (scannen) ergibt 
+// der slave wird mit der nummer angesprochen, die sich durch die Reihenfolge beim Erkennen (scannen) ergibt
 void sendTheData(uint8_t slave, const uint8_t *data, size_t len)
 {
   esp_err_t sendResult = esp_now_send(slaveInfo[slave].slave.peer_addr, data, len);
@@ -446,83 +355,74 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 // empfängt Daten über ESPNow
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
-  if (waiting4Handshake == true)
+  memcpy(Clntbuffer, data, data_len);
+  switch (data[0x01])
   {
-    AllSlavesOnboard(data, data_len);
-    gotPINGmsg = true;
-    bSendLokBuffer = true;
-  }
-  else
-  {
-    memcpy(Clntbuffer, data, data_len);
-    switch (data[0x01])
+  case PING_R:
+    sendToServer(Clntbuffer, fromClnt);
+    for (uint8_t s = 0; s < slaveCnt; s++)
     {
-    case PING_R:
-      sendOutGW(Clntbuffer, fromClnt);
-      for (uint8_t s = 0; s < slaveCnt; s++)
+      uint8_t m[macLen];
+      for (uint8_t cnt = 0; cnt < macLen; cnt++)
       {
-        uint8_t m[macLen];
-        for (uint8_t cnt = 0; cnt < macLen; cnt++)
+        m[cnt] = mac_addr[cnt];
+      }
+      if (macIsEqual(slaveInfo[s].slave.peer_addr, m))
+      {
+        slaveInfo[s].decoderType = data[12];
+        if (data[12] == DEVTYPE_GATE)
         {
-          m[cnt] = mac_addr[cnt];
-        }
-        if (macIsEqual(slaveInfo[s].slave.peer_addr, m))
-        {
-          slaveInfo[s].decoderType = data[12];
-          if (data[12] == DEVTYPE_GATE)
-          {
-            gate.isType = true;
-            gate.decoder_no = s;
-            break;
-          }
+          gate.isType = true;
+          gate.decoder_no = s;
+          break;
         }
       }
-      break;
-    case CONFIG_Status_R:
-      sendOutGW(Clntbuffer, fromClnt);
-      break;
-    case SEND_IP_R:
-      sendOutGW(Clntbuffer, fromClnt);
-      if (!SYSseen)
-      {
-        cntConfig++;
-        if (cntConfig == slaveCnt)
-          goSYS();
-      }
-      break;
-    case S88_EVENT_R:
-      // Meldungen vom Gleisbesetztmelder
-      // an das Gateway
-      sendOutGW(Clntbuffer, fromClnt);
-      // nur wenn Win-DigiPet gestartet ist
-      if (SYSseen)
-      {
-        // an SYS
-        sendOutUDP(Clntbuffer);
-        // bei Schranken auch an diesen Decoder
-        if (gate.isType)
-        {
-          sendTheData(gate.decoder_no, Clntbuffer, CAN_FRAME_SIZE);
-        }
-      }
-      break;
-    case sendCurrAmp:
-      for (uint8_t i = 0x05; i < 0x05 + 0x08; i++)
-      {
-        setAmpere(i - 0x05, data[i]);
-      }
-
-      displayLCD("ESPNow started!");
-      break;
-    default:
-      // send received data via Ethernet to GW and evtl to SYS
-      sendOutGW(Clntbuffer, fromClnt);
-      if (SYSseen)
-      {
-        sendOutUDP(Clntbuffer);
-        sendOutTCP(Clntbuffer);
-      }
-      break;
     }
+    break;
+  case CONFIG_Status_R:
+    sendToServer(Clntbuffer, fromClnt);
+    break;
+  case SEND_IP_R:
+    sendToServer(Clntbuffer, fromClnt);
+    if (!SYSseen)
+    {
+      cntConfig++;
+      if (cntConfig == slaveCnt)
+        goSYS();
+    }
+    break;
+  case S88_EVENT_R:
+    // Meldungen vom Gleisbesetztmelder
+    // an das Gateway
+    sendToServer(Clntbuffer, fromClnt);
+    // nur wenn Win-DigiPet gestartet ist
+    if (SYSseen)
+    {
+      // an SYS
+      sendToWDP(Clntbuffer);
+      // bei Schranken auch an diesen Decoder
+      if (gate.isType)
+      {
+        sendTheData(gate.decoder_no, Clntbuffer, CAN_FRAME_SIZE);
+      }
+    }
+    break;
+  case sendCurrAmp:
+    for (uint8_t i = 0x05; i < 0x05 + 0x08; i++)
+    {
+      setAmpere(i - 0x05, data[i]);
+    }
+
+    displayLCD("ESPNow started!");
+    break;
+  default:
+    // send received data via Ethernet to GW and evtl to SYS
+    sendToServer(Clntbuffer, fromClnt);
+    if (SYSseen)
+    {
+      sendToWDP(Clntbuffer);
+      //        sendOutTCP(Clntbuffer);
+    }
+    break;
   }
 }

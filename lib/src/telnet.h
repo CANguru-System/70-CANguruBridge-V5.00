@@ -21,9 +21,9 @@
 // der body ist in utils.h zu finden
 void WiFiEvent(WiFiEvent_t event);
 // liefert die Info, ob ETHERNET aufgebaut ist
-bool getEthStatus();
+bool getServerStatus();
 // setzt den Status, dass ETHERNET aufgebaut ist
-void setEthStatus(bool status);
+void setServerStatus(bool status);
 
 // Klasse, mit dem der Telnet-Client bedient wird
 // mit dem Telnet-Client werden die Ausgaben für den CANguru-Server

@@ -17,18 +17,18 @@
 #include <ETH.h>
 #include <CANguru.h>
 
-static bool eth_connected = false;
+static bool server_connected = false;
 
 // liefert die Info, ob ETHERNET aufgebaut ist
-bool getEthStatus()
+bool getServerStatus()
 {
-  return eth_connected;
+  return server_connected;
 }
 
 // setzt den Status, dass ETHERNET aufgebaut ist
-void setEthStatus(bool status)
+void setServerStatus(bool status)
 {
-  eth_connected = status;
+  server_connected = status;
 }
 
 // Klasse, mit dem der Telnet-Client bedient wird

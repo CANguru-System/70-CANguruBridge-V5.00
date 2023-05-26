@@ -10,6 +10,19 @@
 #include <Adafruit_GFX.h>
 #include <ESPAsyncWebServer.h>
 
+enum enum_canguruStatus
+{
+  /*00*/ waiting4server,
+  /*01*/ startTelnetServer,
+  /*02*/ startGleisbox,
+  /*03*/ startScanning,
+  /*04*/ stopScanning,
+  /*05*/ wait4slaves,
+  /*06*/ wait4ping,
+  nextStep
+};
+enum_canguruStatus canguruStatus;
+
 // buffer for receiving and sending data
 uint8_t M_PATTERN[] = {0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 
@@ -19,17 +32,23 @@ bool bLokDiscovery;
 bool locofileread;
 bool initialDataAlreadySent;
 byte locid;
+bool scanningFinished;
 
 canguruETHClient telnetClient;
 
+// Forward declarations
 //
+void sendToServer(uint8_t *buffer, CMD cmd);
+void sendToWDPfromCAN(uint8_t *buffer);
+//
+
 void printCANFrame(uint8_t *buffer, CMD dir)
 {
   // Diese Prozedur könnte mehrere Male aufgerufen werden;
   // deshalb wird die Erhöhung begrenzt
   if (buffer[Framelng] <= 0x08)
     buffer[Framelng] += 0x0F;
-  sendOutGW(buffer, dir);
+  sendToServer(buffer, dir);
   return;
 }
 
@@ -78,7 +97,7 @@ void setup_can_driver()
 void printMSG(uint8_t no)
 {
   uint8_t MSG[] = {0x00, no, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  sendOutGW(MSG, MSGfromBridge);
+  sendToServer(MSG, MSGfromBridge);
 }
 
 // ein CAN-Frame wird erzeugt, der Parameter noFrame gibt an, welche Daten
@@ -223,53 +242,31 @@ void produceFrame(patterns noFrame)
 
 #include <utils.h>
 
-void sendOutGW(uint8_t *buffer, CMD cmd)
+// sendet den Frame, auf den der Zeiger buffer zeigt, über ESPNow
+// an alle Slaves
+void send2AllClients(uint8_t *buffer)
 {
-  //%
-/*  buffer[0] = cmd;
-  UDPToServer.beginPacket(ipGateway, localPortoutGW);
-  UDPToServer.write(buffer, CAN_FRAME_SIZE);
-  UDPToServer.endPacket();
-  buffer[0] = 0x00;*/
+  uint8_t slaveCnt = get_slaveCnt();
+  for (uint8_t s = 0; s < slaveCnt; s++)
+  {
+    sendTheData(s, buffer, CAN_FRAME_SIZE);
+  }
 }
 
-void msgStartScanning()
+// wenn aus der UID des Frames ein Slave identifizierbar ist, wird der
+// Frame nur an diesen Slave geschickt, ansonsten an alle
+void send2OneClient(uint8_t *buffer)
 {
-  telnetClient.printTelnet(true, "Start scanning for slaves ... ", 0);
-}
-
-// sendet einen CAN-Frame an den Teilnehmer und gibt ihn anschließend aus
-void sendOutTCP(uint8_t *buffer)
-{
-//  writeTCP(buffer, CAN_FRAME_SIZE);
-  //  printCANFrame(buffer, toTCP);
-}
-
-void sendOutTCPfromCAN(uint8_t *buffer)
-{
-//  writeTCP(buffer, CAN_FRAME_SIZE);
-  //  printCANFrame(buffer, fromCAN2TCP);
-  //  print_can_frame(3, buffer);
-}
-
-void sendOutUDP(uint8_t *buffer)
-{
-/*  UDPToWDP.beginPacket(ipGateway, localPortoutSYS);
-  UDPToWDP.write(buffer, CAN_FRAME_SIZE);
-  UDPToWDP.endPacket();
-  printCANFrame(buffer, toUDP);*/
-}
-
-void sendOutUDPfromCAN(uint8_t *buffer)
-{
-/*  UDPToWDP.beginPacket(ipGateway, localPortoutSYS);
-  UDPToWDP.write(buffer, CAN_FRAME_SIZE);
-  UDPToWDP.endPacket();*/
+  uint8_t ss = matchUID(buffer);
+  if (ss == 0xFF)
+    send2AllClients(buffer);
+  else
+    sendTheData(ss, buffer, CAN_FRAME_SIZE);
 }
 
 void sendOutClnt(uint8_t *buffer, CMD dir)
 {
- /* log_e("sendOutClnt: %X", buffer[0x01]);
+  log_e("sendOutClnt: %X", buffer[0x01]);
   switch (buffer[0x01])
   {
   case CONFIG_Status:
@@ -293,10 +290,182 @@ void sendOutClnt(uint8_t *buffer, CMD dir)
     send2AllClients(buffer);
     break;
   }
-  printCANFrame(buffer, dir);*/
+  printCANFrame(buffer, dir);
 }
 
-void setup() {
+// prüft, ob es Slaves gibt und sendet den CAN-Frame buffer dann an die Slaves
+void proc2Clnts(uint8_t *buffer, CMD dir)
+{
+  // to Client
+  if (get_slaveCnt() > 0)
+  {
+    sendOutClnt(buffer, dir);
+  }
+}
+
+void sendToServer(uint8_t *buffer, CMD cmd)
+{
+  //%
+  buffer[0] = cmd;
+  UDPToServer.beginPacket(ipGateway, localPortToServer);
+  UDPToServer.write(buffer, CAN_FRAME_SIZE);
+  UDPToServer.endPacket();
+  buffer[0] = 0x00;
+}
+
+void msgStartScanning()
+{
+  telnetClient.printTelnet(true, "Start scanning for slaves ... ", 0);
+}
+/*
+void writeTCP(uint8_t *tcb, uint16_t strlng)
+{
+  if (TCPclient)
+  {
+    TCPclient.write(tcb, strlng);
+    delay(2);
+  }
+}
+
+// sendet einen CAN-Frame an den Teilnehmer und gibt ihn anschließend aus
+void sendOutTCP(uint8_t *buffer)
+{
+  writeTCP(buffer, CAN_FRAME_SIZE);
+  //  printCANFrame(buffer, toTCP);
+}
+
+void sendOutTCPfromCAN(uint8_t *buffer)
+{
+  writeTCP(buffer, CAN_FRAME_SIZE);
+//    printCANFrame(buffer, fromCAN2TCP);
+//    print_can_frame(3, buffer);
+}*/
+
+// sendet CAN-Frames vom  CAN (Gleisbox) zum SYS
+void proc_fromCAN2WDPandServer()
+{
+  twai_message_t MessageReceived;
+  if (ESP32Can.CANReadFrame(&MessageReceived) == ESP32CAN_OK)
+  {
+    // read a packet from CAN
+    uint8_t UDPbuffer[] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    MessageReceived.identifier &= CAN_EFF_MASK;
+    MessageReceived.identifier = htonl(MessageReceived.identifier);
+    memcpy(UDPbuffer, &MessageReceived.identifier, 4);
+    UDPbuffer[4] = MessageReceived.data_length_code;
+    memcpy(&UDPbuffer[5], MessageReceived.data, MessageReceived.data_length_code);
+    // now dispatch
+    log_e("proc_fromCAN2WDPandServer: %X", UDPbuffer[0x01]);
+    switch (UDPbuffer[0x01])
+    {
+    case PING: // PING
+      sendToServer(UDPbuffer, fromCAN);
+      break;
+    case PING_R: // PING
+      sendToServer(UDPbuffer, fromCAN);
+      sendToWDPfromCAN(UDPbuffer);
+      //      sendOutTCPfromCAN(UDPbuffer);
+      delay(100);
+      if (UDPbuffer[12] == DEVTYPE_GB && get_slaveCnt() == 0)
+      {
+        printMSG(NoSlaves);
+        displayLCD(" -- No Slaves!");
+        goSYS();
+      }
+      break;
+      /*    case LokDiscovery_R:
+            // mfxdiscovery war erfolgreich
+            if (UDPbuffer[4] == 0x05)
+            {
+              bindANDverify(UDPbuffer);
+              // an gateway den anfang melden
+            }
+            break;
+          case MFXVerify:
+            bLokDiscovery = true;
+            produceFrame(M_STARTCONFIG);
+            // LocID
+            M_PATTERN[6] = UDPbuffer[10];
+            // MFX-UID
+            memcpy(&M_PATTERN[7], lastmfxUID, 4);
+            // to Gateway
+            sendToServer(M_PATTERN, fromCAN);
+            cvIndex = readConfig(0);
+            break;
+          case ReadConfig_R:
+            // Rückmeldungen von config
+            sendToServer(UDPbuffer, fromCAN);
+            sendToWDPfromCAN(UDPbuffer);
+      //      sendOutTCPfromCAN(UDPbuffer);
+            if ((UDPbuffer[10] == 0x03) && (bLokDiscovery == true))
+            {
+              if (UDPbuffer[11] == 0x00)
+              {
+                // das war das letzte Zeichen
+                // an gateway den schluss melden
+                bLokDiscovery = false;
+                // verwendete locid, damit stellt der Server fest, ob
+                // die erkannte Lok neu oder bereits bekannt war
+                M_PATTERN[6] = locid;
+                produceFrame(M_FINISHCONFIG);
+                // to Gateway
+                sendToServer(M_PATTERN, fromCAN);
+              }
+              else
+              {
+                // to Gateway
+                cvIndex = readConfig(cvIndex);
+              }
+            }
+            break;*/
+    // Magnetartikel schalten
+    case SWITCH_ACC_R:
+      /*
+    Der Schaltbefehl vom Steuerungsprogramm wurde an die Decoder, aber auch
+    direkt an die Gleisbox gesendet. Also antwortet auch die Gleisbox und bestätigt
+    damit den Befehl, obwohl möglicherweise gar kein Decoder angeschlossen ist. Deshalb wird
+    mit diesem Konstrukt die Antwort der Gleisbox unterdrückt.
+    Die Bestätigungsmeldung kommt ausschließlich vom Decoder und wird unter espnow.cpp bearbeitet.
+
+    Wird momentan nicht umgesetzt, da ältere WinDigi-Pet-Versionen die Rückmeldung von der Gleisbox erwarten!
+    */
+      sendToServer(UDPbuffer, fromCAN);
+      sendToWDPfromCAN(UDPbuffer);
+      //      sendOutTCPfromCAN(UDPbuffer);
+
+      break;
+    case WriteConfig_R:
+      sendToServer(UDPbuffer, fromCAN);
+      sendToWDPfromCAN(UDPbuffer);
+      //      sendOutTCPfromCAN(UDPbuffer);
+      break;
+    default:
+      sendToWDPfromCAN(UDPbuffer);
+      //      sendOutTCPfromCAN(UDPbuffer);
+      break;
+    }
+  }
+}
+
+//////////////// Ausgaberoutinen
+
+void sendToWDP(uint8_t *buffer)
+{
+  UDPToWDP.beginPacket(ipGateway, localPortToWDP);
+  UDPToWDP.write(buffer, CAN_FRAME_SIZE);
+  UDPToWDP.endPacket();
+  printCANFrame(buffer, toUDP);
+}
+
+void sendToWDPfromCAN(uint8_t *buffer)
+{
+  UDPToWDP.beginPacket(ipGateway, localPortToWDP);
+  UDPToWDP.write(buffer, CAN_FRAME_SIZE);
+  UDPToWDP.endPacket();
+}
+
+void setup()
+{
 #if defined ARDUINO_ESP32_EVB
   delay(350);
 #endif
@@ -306,8 +475,6 @@ void setup() {
   drawCircle = false;
   // das Display wird initalisiert
   initDisplayLCD28();
-  // noch nicht nach Slaves scannen
-  startOrStopScanning(false);
   // der Timer für das Blinken wird initialisiert
   stillAliveBlinkSetup();
   // start the CAN bus at 250 kbps
@@ -316,18 +483,20 @@ void setup() {
   // Variablen werden auf Anfangswerte gesetzt und die Routinen für das Senden
   // und Empfangen über ESNOW werden registriert
   espInit();
-  // die Routine für die Statusmeldungen des WiFi wird registriert 
+  // die Routine für die Statusmeldungen des WiFi wird registriert
   wifi_event_id_t inet_evt_hnd = WiFi.onEvent(iNetEvtCB);
   // das gleiche mit ETHERNET
   ETH.begin();
   // das Zugprogramm (WDP) wurde noch nicht erkannt
   set_SYSseen(false);
-  
+
   // Variablen werden gesetzt
   bLokDiscovery = false;
   locofileread = false;
   initialDataAlreadySent = false;
   locid = 1;
+  canguruStatus = waiting4server;
+  scanningFinished = false;
   // start the telnetClient
   telnetClient.telnetInit();
   // This initializes udp and transfer buffer
@@ -362,12 +531,12 @@ void goSYS()
 // die Routin antwortet auf die Anfrage des CANguru-Servers mit CMD 0x88;
 // damit erhält er die IP-Adresse der CANguru-Bridge und kann dann
 // damit eine Verbindung aufbauen
-void proc_IP2GW()
+bool proc_wait4Server()
 {
+  bool result;
   uint8_t UDPbuffer[CAN_FRAME_SIZE]; // buffer to hold incoming packet,
-  if (telnetClient.getIsipBroadcastSet())
-    return;
   yield();
+  result = false;
   int packetSize = UDPFromServer.parsePacket();
   // if there's data available, read a packet
   if (packetSize)
@@ -375,25 +544,25 @@ void proc_IP2GW()
     // read the packet into packetBuffer
     UDPFromServer.read(UDPbuffer, CAN_FRAME_SIZE);
     // send received data via ETHERNET
-    log_e("IP2GW: %X", UDPbuffer[0x01]);
     switch (UDPbuffer[0x1])
     {
     case CALL4CONNECT:
-      log_e("IP2GWX CANguru-Server connected");
-      setEthStatus(true);
+      setServerStatus(true);
       ipGateway = telnetClient.setipBroadcast(UDPFromServer.remoteIP());
       UDPbuffer[0x1]++;
-      sendOutGW(UDPbuffer, toGW);
+      sendToServer(UDPbuffer, toServer);
+      result = true;
       break;
     }
   }
+  return result;
 }
 
 void proc_start_lokBuffer()
 {
   //  log_e("proc_start_lokBuffer");
   produceFrame(M_CNTLOKBUFFER);
-  sendOutGW(M_PATTERN, toGW);
+  sendToServer(M_PATTERN, toServer);
 }
 
 // damit wird die Gleisbox zum Leben erweckt
@@ -405,20 +574,6 @@ void send_start_60113_frames()
   proc2CAN(M_PATTERN, toCAN);
 }
 
-// Start des Telnet-Servers
-void startTelnetserver()
-{
-  if (telnetClient.startTelnetSrv())
-  {
-    //    log_e("startTelnetserver");
-    delay(5);
-    send_start_60113_frames();
-    // erstes PING soll schnell kommen
-    secs = wait_for_ping;
-    startOrStopScanning(true);
-  }
-}
-
 void startProcedures()
 {
   static bool b1 = true;
@@ -427,37 +582,79 @@ void startProcedures()
   static bool b4 = true;
   if ((b1 || b2 || b3 || b4) == true)
   {
-    if (!telnetClient.getTelnetHasConnected())
-    {
-      startTelnetserver();
-      b1 = !telnetClient.getTelnetHasConnected();
-    }
+    /*    if (!telnetClient.getTelnetHasConnected())
+        {
+          startTelnetserver();
+          b1 = !telnetClient.getTelnetHasConnected();
+        }*/
     if (b2 == true)
     {
-//      proc_startTCPServer();
+      //      proc_startTCPServer();
       b2 = false;
     }
     if (get_sendLokBuffer())
     {
-//      proc_start_lokBuffer();
+      //      proc_start_lokBuffer();
       b3 = false;
-    }
-    if (get_gotPINGmsg())
-    {
-//      proc_PING();
-      b4 = false;
     }
   }
 }
 
-void loop() {
+void loop()
+{
   // die folgenden Routinen werden ständig aufgerufen
   stillAliveBlinking();
-  espNowProc();
-  proc_IP2GW();
-  if (getEthStatus() == true)
+  switch (canguruStatus)
   {
-    // diese nur nach Aufbau der ETHERNET-Verbindung
-    startProcedures();
+  case waiting4server:
+    log_e("waiting4server");
+    if (proc_wait4Server() == true)
+      canguruStatus = startTelnetServer;
+    break;
+  case startTelnetServer:
+    log_e("startTelnetServer");
+    if (telnetClient.startTelnetSrv())
+      canguruStatus = startGleisbox;
+    break;
+  case startGleisbox:
+    log_e("startGleisbox");
+    delay(5);
+    send_start_60113_frames();
+    // erstes PING soll schnell kommen
+    secs = wait_for_ping;
+    canguruStatus = startScanning;
+    break;
+  case startScanning:
+    log_e("startScanning");
+    Scan4Slaves();
+    canguruStatus = stopScanning;
+    break;
+  case stopScanning:
+    if (scanningFinished == true)
+    {
+      log_e("stopScanning");
+      registerSlaves();
+      //      sendOutTCP(M_PATTERN);
+      canguruStatus = wait4ping;
+    }
+    break;
+  case wait4ping:
+    log_e("wait4ping");
+    produceFrame(M_CAN_PING);
+    proc2CAN(M_PATTERN, toCAN);
+    proc2Clnts(M_PATTERN, toClnt);
+    //    proc2CAN(M_PATTERN, toCAN);
+    canguruStatus = wait4slaves;
+    break;
+  case wait4slaves:
+    log_e("wait4slaves");
+    proc_fromCAN2WDPandServer();
+    //    canguruStatus = nextStep;
+    break;
+  case nextStep:
+    //    log_e("nextStep");
+    break;
+  default:
+    break;
   }
 }

@@ -76,11 +76,11 @@ AsyncWebServerRequest *arrayRequest[maxPackets] = {};
 
 // die Portadressen; 15730 und 15731 sind von Märklin festgelegt
 // OUT is even
-const unsigned int localPortDelta = 2;                                // local port to listen on
-const unsigned int localPortToWDP = 15730;                           // local port to send on
-const unsigned int localPortFromWDP = 15731;                            // local port to listen on
-const unsigned int localPortToServer = localPortToWDP + localPortDelta; // local port to send on
-const unsigned int localPortFromServer = localPortFromWDP + localPortDelta;   // local port to listen on
+const unsigned int localPortDelta = 2;                                      // local port to listen on
+const unsigned int localPortToWDP = 15730;                                  // local port to send on
+const unsigned int localPortFromWDP = 15731;                                // local port to listen on
+const unsigned int localPortToServer = localPortToWDP + localPortDelta;     // local port to send on
+const unsigned int localPortFromServer = localPortFromWDP + localPortDelta; // local port to listen on
 
 // create UDP instance
 //  EthernetUDP instances to let us send and receive packets over UDP
@@ -108,6 +108,9 @@ void iNetEvtCB(arduino_event_id_t event, arduino_event_info_t info)
 {
   switch (event)
   {
+  case ARDUINO_EVENT_WIFI_SCAN_DONE:
+    scanningFinished = true;
+    break;
   case ARDUINO_EVENT_ETH_START: // SYSTEM_EVENT_ETH_START:
     displayLCD("ETHERNET Started");
     break;
@@ -124,11 +127,11 @@ void iNetEvtCB(arduino_event_id_t event, arduino_event_info_t info)
     break;
   case ARDUINO_EVENT_ETH_DISCONNECTED: // SYSTEM_EVENT_ETH_DISCONNECTED:
     displayLCD("ETHERNET Disconnected");
-    setEthStatus(false);
+    setServerStatus(false);
     break;
   case ARDUINO_EVENT_ETH_STOP: // SYSTEM_EVENT_ETH_STOP:
     displayLCD("ETHERNET Stopped");
-    setEthStatus(false);
+    setServerStatus(false);
     break;
   default:
     break;
@@ -141,16 +144,6 @@ void timer1s()
 {
   static uint8_t time2SendPing = 1;
   secs++;
-  if (get_time4Scanning() == true)
-  {
-    if (secs > (maxDevices / 2))
-    {
-      startOrStopScanning(false);
-      produceFrame(M_CAN_PING);
-      proc2CAN(M_PATTERN, toClnt);
-      sendOutTCP(M_PATTERN);
-    }
-  }
   // startet den fillTheCircle()-Prozess; Ausgabe pulsiert mit einem Kreis
   if (secs % maxDevices == 0)
     setbfillRect();
@@ -174,7 +167,7 @@ void timer1s()
       time2SendPing = 1;
       produceFrame(M_CAN_PING);
       proc2CAN(M_PATTERN, toClnt);
-      sendOutTCP(M_PATTERN);
+      //      sendOutTCP(M_PATTERN);
     }
   }
 }
@@ -200,38 +193,35 @@ void stillAliveBlinking()
   static uint8_t slv = 0;
   uint8_t M_BLINK[] = {0x00, BlinkAlive, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   uint8_t M_IDATA[] = {0x00, sendInitialData, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  if (get_waiting4Handshake() == false)
+  if (currStatus != lastStatus)
   {
-    if (currStatus != lastStatus)
+    lastStatus = currStatus;
+    M_BLINK[0x05] = currStatus;
+    sendTheData(slv, M_BLINK, CAN_FRAME_SIZE);
+    if (get_initialData2send(slv))
     {
-      lastStatus = currStatus;
-      M_BLINK[0x05] = currStatus;
-      sendTheData(slv, M_BLINK, CAN_FRAME_SIZE);
-      if (get_initialData2send(slv))
+      switch (get_decoder_type(slv))
       {
-        switch (get_decoder_type(slv))
-        {
-        case DEVTYPE_SERVO:
-        case DEVTYPE_SIGNAL:
-        case DEVTYPE_LEDSIGNAL:
-        case DEVTYPE_CANBOOSTER:
-          sendTheData(slv, M_IDATA, CAN_FRAME_SIZE);
-          delay(4 * wait_time_medium);
-          break;
-        case DEVTYPE_RM:
-          sendTheData(slv, M_IDATA, CAN_FRAME_SIZE);
-          delay(24 * wait_time_medium);
-          break;
-        case DEVTYPE_LIGHT:
-        case DEVTYPE_GATE:
-          break;
-        }
-        reset_initialData2send(slv);
+      case DEVTYPE_SERVO:
+      case DEVTYPE_SIGNAL:
+      case DEVTYPE_LEDSIGNAL:
+      case DEVTYPE_CANBOOSTER:
+        sendTheData(slv, M_IDATA, CAN_FRAME_SIZE);
+        delay(4 * wait_time_medium);
+        break;
+      case DEVTYPE_RM:
+        sendTheData(slv, M_IDATA, CAN_FRAME_SIZE);
+        delay(24 * wait_time_medium);
+        break;
+      case DEVTYPE_LIGHT:
+      case DEVTYPE_GATE:
+        break;
       }
-      slv++;
-      if (slv >= get_slaveCnt())
-        slv = 0;
+      reset_initialData2send(slv);
     }
+    slv++;
+    if (slv >= get_slaveCnt())
+      slv = 0;
   }
 }
 
