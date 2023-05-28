@@ -18,13 +18,23 @@ enum enum_canguruStatus
   /*03*/ startScanning,
   /*04*/ stopScanning,
   /*05*/ wait4slaves,
-  /*06*/ wait4ping,
+  /*06*/ wait4lokbuffer,
+  /*07*/ wait4ping,
   nextStep
 };
 enum_canguruStatus canguruStatus;
 
 // buffer for receiving and sending data
 uint8_t M_PATTERN[] = {0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+uint8_t lastmfxUID[] = {0x00, 0x00, 0x00, 0x00};
+
+uint8_t cntLoks;
+struct LokBufferType
+{
+  uint8_t lastmfxUID[4];
+  uint8_t adr;
+};
+LokBufferType *LokBuffer = NULL;
 
 const uint8_t maxPackets = 30;
 bool bLokDiscovery;
@@ -33,6 +43,7 @@ bool locofileread;
 bool initialDataAlreadySent;
 byte locid;
 bool scanningFinished;
+bool allLoksAreReported;
 
 canguruETHClient telnetClient;
 
@@ -362,6 +373,8 @@ void proc_fromCAN2WDPandServer()
       sendToServer(UDPbuffer, fromCAN);
       break;
     case PING_R: // PING
+                 // wenn alle slaves zu Beginn des Programmes gezählt werden, ist damit die Gleisbox auch dabei
+      incSlavesAreReadyToZero();
       sendToServer(UDPbuffer, fromCAN);
       sendToWDPfromCAN(UDPbuffer);
       //      sendOutTCPfromCAN(UDPbuffer);
@@ -464,6 +477,180 @@ void sendToWDPfromCAN(uint8_t *buffer)
   UDPToWDP.endPacket();
 }
 
+//////////////// Empfangsroutinen
+
+// Behandlung der Kommandos, die der CANguru-Server aussendet
+void proc_fromServer2CANandClnt()
+{
+  uint8_t Lokno;
+  uint8_t UDPbuffer[CAN_FRAME_SIZE]; // buffer to hold incoming packet,
+  int packetSize = UDPFromServer.parsePacket();
+  // if there's data available, read a packet
+  if (packetSize)
+  {
+    // read the packet into packetBufffer
+    UDPFromServer.read(UDPbuffer, CAN_FRAME_SIZE);
+    log_e("fromGW2CANandClnt: %X", UDPbuffer[0x01]);
+    printCANFrame(UDPbuffer, fromServer);
+    // send received data via usb and CAN
+    switch (UDPbuffer[0x1])
+    {
+    case SYS_CMD:
+    case 0x36:
+      proc2CAN(UDPbuffer, fromGW2CAN);
+      proc2Clnts(UDPbuffer, fromGW2Clnt);
+      break;
+    case 0x02:
+    case 0x04:
+    case 0x06:
+    case SEND_IP:
+    case CONFIG_Status:
+      proc2Clnts(UDPbuffer, fromGW2Clnt);
+      break;
+    case ReadConfig:
+    case WriteConfig:
+      proc2CAN(UDPbuffer, fromGW2CAN);
+      break;
+    case MfxProc:
+      // received next locid
+      locid = UDPbuffer[0x05];
+      produceFrame(M_SIGNAL);
+      sendToServer(M_PATTERN, fromCAN);
+      break;
+    case MfxProc_R:
+      /*      // there is a new file lokomotive.cs2 to send
+            produceFrame(M_SIGNAL);
+            sendToServer(M_PATTERN, fromCAN);
+            receiveLocFile(0, false);*/
+      break;
+    // PING
+    case PING:
+      log_e("M_CAN_PING");
+      produceFrame(M_CAN_PING);
+      proc2CAN(M_PATTERN, fromGW2CAN);
+      break;
+    case sendCntLokBuffer_R:
+      // Anzahl der Loks, die der Server kennt, werden gemeldet
+      log_e("sendCntLokBuffer_R %x", UDPbuffer[0x05]);
+      cntLoks = UDPbuffer[0x05];
+      // die Anzahl an gemeldeten Loks im Server ausgeben
+      char cntBuffer[25];
+      sprintf(cntBuffer, "%d Lok(s) im System", cntLoks);
+      telnetClient.printTelnet(true, cntBuffer, 0);
+      if (cntLoks > 0)
+      {
+        // erste Lok abrufen
+        // evtl. alte Zuweisung löschen
+        if (LokBuffer != NULL)
+        {
+          delete[] LokBuffer; // Free memory allocated for the buffer array.
+          LokBuffer = NULL;   // Be sure the deallocated memory isn't used.
+        }
+        // Speicher für alle Loks reservieren
+        if (LokBuffer == NULL)
+          LokBuffer = new LokBufferType[cntLoks]; // Allocate cntLoks LokBufferType and save ptr in buffer
+        produceFrame(M_SENDLOKBUFFER);
+        M_PATTERN[5] = 0;
+        sendToServer(M_PATTERN, toServer);
+      }
+      break;
+    case sendLokBuffer_R:
+      Lokno = UDPbuffer[0x05];
+      log_e("sendLokBuffer_R: %x", Lokno);
+      if (LokBuffer != NULL)
+      {
+        //        saveFrame(UDPbuffer);
+        LokBuffer[Lokno].adr = UDPbuffer[0x06];
+        for (uint8_t b = 0; b < 4; b++)
+        {
+          LokBuffer[Lokno].lastmfxUID[b] = UDPbuffer[0x07 + b];
+        }
+        Lokno++;
+        allLoksAreReported = cntLoks == Lokno;
+        if (cntLoks > Lokno)
+        {
+          // nächste Lok abrufen
+          produceFrame(M_SENDLOKBUFFER);
+          M_PATTERN[5] = Lokno;
+          sendToServer(M_PATTERN, toServer);
+          // das war die letzte Lok
+          // der Anmeldeprozess kann weitergehen
+        }
+      }
+      break;
+    case restartBridge:
+      proc2Clnts(UDPbuffer, fromGW2Clnt);
+      ESP.restart();
+      break;
+    }
+  }
+}
+
+// sendet CAN-Frames vom SYS zum CAN (Gleisbox)
+void proc_fromWDP2CAN()
+{
+  uint8_t UDPbuffer[CAN_FRAME_SIZE]; // buffer to hold incoming packet
+  uint8_t M_PING_RESPONSEx[] = {0x00, 0x30, 0x00, 0x00, 0x00};
+  int packetSize = UDPFromWDP.parsePacket();
+  // if there's data available, read a packet
+  if (packetSize)
+  {
+    // read the packet into packetBufffer
+    UDPFromWDP.read(UDPbuffer, CAN_FRAME_SIZE);
+    // send received data via usb and CAN
+    if (UDPbuffer[0x01] == SYS_CMD && UDPbuffer[0x09] == SYS_GO)
+      set_SYSseen(true);
+    proc2CAN(UDPbuffer, fromServer2CAN);
+    log_e("fromServer2CAN: %X", UDPbuffer[0x01]);
+    switch (UDPbuffer[0x01])
+    {
+    case PING:
+      produceFrame(M_CAN_PING_CS2); //% M_CAN_PING_CS2_2
+      sendToWDP(M_PATTERN);
+      produceFrame(M_CAN_PING_CS2_2);
+      sendToWDP(M_PATTERN);
+      set_SYSseen(true);
+      break;
+    case PING_R:
+      if ((UDPbuffer[11] == 0xEE) && (UDPbuffer[12] == 0xEE))
+      {
+        proc2CAN(UDPbuffer, fromServer2CAN);
+        delay(100);
+        memcpy(UDPbuffer, M_PING_RESPONSEx, 5);
+        sendToWDP(UDPbuffer);
+        //        proc2CAN(UDPbuffer, fromServer2CAN);
+        delay(100);
+      }
+      produceFrame(M_CAN_PING_CS2_1);
+      sendToWDP(M_PATTERN);
+      produceFrame(M_CAN_PING_CS2_2);
+      sendToWDP(M_PATTERN);
+      break;
+    case Lok_Speed:
+    case Lok_Direction:
+    case Lok_Function:
+      // send received data via wifi to clients
+      proc2Clnts(UDPbuffer, fromServer2CAN);
+      break;
+    case SWITCH_ACC:
+      // send received data via wifi to clients
+      proc2Clnts(UDPbuffer, toClnt);
+      break;
+    case S88_Polling:
+      UDPbuffer[0x01]++;
+      UDPbuffer[0x04] = 7;
+      sendToWDPfromCAN(UDPbuffer);
+      break;
+    case S88_EVENT:
+      UDPbuffer[0x01]++;
+      UDPbuffer[0x09] = 0x00; // is free
+      UDPbuffer[0x04] = 8;
+      sendToWDPfromCAN(UDPbuffer);
+      break;
+    }
+  }
+}
+
 void setup()
 {
 #if defined ARDUINO_ESP32_EVB
@@ -497,6 +684,8 @@ void setup()
   locid = 1;
   canguruStatus = waiting4server;
   scanningFinished = false;
+  allLoksAreReported = false;
+  setallSlavesAreReadyToZero();
   // start the telnetClient
   telnetClient.telnetInit();
   // This initializes udp and transfer buffer
@@ -574,32 +763,6 @@ void send_start_60113_frames()
   proc2CAN(M_PATTERN, toCAN);
 }
 
-void startProcedures()
-{
-  static bool b1 = true;
-  static bool b2 = true;
-  static bool b3 = true;
-  static bool b4 = true;
-  if ((b1 || b2 || b3 || b4) == true)
-  {
-    /*    if (!telnetClient.getTelnetHasConnected())
-        {
-          startTelnetserver();
-          b1 = !telnetClient.getTelnetHasConnected();
-        }*/
-    if (b2 == true)
-    {
-      //      proc_startTCPServer();
-      b2 = false;
-    }
-    if (get_sendLokBuffer())
-    {
-      //      proc_start_lokBuffer();
-      b3 = false;
-    }
-  }
-}
-
 void loop()
 {
   // die folgenden Routinen werden ständig aufgerufen
@@ -635,24 +798,35 @@ void loop()
       log_e("stopScanning");
       registerSlaves();
       //      sendOutTCP(M_PATTERN);
-      canguruStatus = wait4ping;
+      canguruStatus = wait4lokbuffer;
     }
+    break;
+  case wait4lokbuffer:
+    log_e("wait4lokbuffer");
+    proc_start_lokBuffer();
+    canguruStatus = wait4ping;
     break;
   case wait4ping:
     log_e("wait4ping");
-    produceFrame(M_CAN_PING);
-    proc2CAN(M_PATTERN, toCAN);
-    proc2Clnts(M_PATTERN, toClnt);
-    //    proc2CAN(M_PATTERN, toCAN);
-    canguruStatus = wait4slaves;
+    proc_fromServer2CANandClnt();
+    if (allLoksAreReported == true)
+    {
+      delay(200);
+      produceFrame(M_CAN_PING);
+      proc2CAN(M_PATTERN, toCAN);
+      proc2Clnts(M_PATTERN, toClnt);
+      canguruStatus = wait4slaves;
+    }
     break;
   case wait4slaves:
     log_e("wait4slaves");
     proc_fromCAN2WDPandServer();
-    //    canguruStatus = nextStep;
+    if (getallSlavesAreReady() == (get_slaveCnt() + 1))
+      canguruStatus = nextStep;
     break;
   case nextStep:
-    //    log_e("nextStep");
+    //  log_e("nextStep");
+    proc_fromServer2CANandClnt();
     break;
   default:
     break;

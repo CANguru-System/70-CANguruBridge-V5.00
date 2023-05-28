@@ -92,9 +92,9 @@ enum CMD
   toTCP,
   fromCAN,
   /*05*/ fromClnt,
-  fromUDP,
+  fromServer,
   fromTCP,
-  fromUDP2CAN,
+  fromServer2CAN,
   fromTCP2CAN,
   /*10*/ fromTCP2Clnt,
   fromCAN2UDP,
@@ -147,8 +147,6 @@ uint8_t get_slaveCnt();
 bool get_SYSseen();
 // setzt, dass SYS gestartet ist
 void set_SYSseen(bool SYS);
-// gibt an, ob ein sendLokBuffer zu senden ist
-bool get_sendLokBuffer();
 // fordert einen Slave dazu auf, Anfangsdaten bekannt zu geben
 void set_initialData2send(uint8_t slave);
 // quittiert, dass Anfangsdaten übertragen wurden
@@ -165,6 +163,12 @@ slaveInfoStruct get_slaveInfo(uint8_t slave);
 void printMac(uint8_t m[macLen]);
 // vergleicht zwei MAC-Adressen
 bool macIsEqual(const uint8_t m0[macLen], const uint8_t m1[macLen]);
+// setzt die Variable nbrSlavesAreReady auf NULL
+void setallSlavesAreReadyToZero();
+// gibt den Wert der Variablen nbrSlavesAreReady zurück
+uint8_t getallSlavesAreReady();
+// erhöht SlavesAreReady um 1
+void incSlavesAreReadyToZero();
 // Scannt nach Slaves
 void Scan4Slaves();
 // setzt die vorgegebene MAC-Adresse des Masters

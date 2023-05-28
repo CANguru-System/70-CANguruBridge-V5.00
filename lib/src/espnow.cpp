@@ -19,6 +19,7 @@
 uint8_t slaveCnt;
 uint8_t slaveCurr;
 decoderStruct gate;
+uint8_t nbrSlavesAreReady;
 
 // willkürlich festgelegte MAC-Adresse
 const uint8_t masterCustomMac[] = {0x30, 0xAE, 0xA4, 0x89, 0x92, 0x71};
@@ -28,7 +29,6 @@ slaveInfoStruct tmpSlaveInfo;
 esp_now_peer_info_t cand;
 String ssidSLV = "CNgrSLV";
 
-bool bSendLokBuffer;
 bool SYSseen;
 uint8_t cntConfig;
 uint8_t Clntbuffer[CAN_FRAME_SIZE]; // buffer to hold incoming packet,
@@ -67,7 +67,6 @@ void espInit()
   slaveCnt = 0;
   slaveCurr = 0;
   gate.isType = false;
-  bSendLokBuffer = false;
   initVariant();
   if (esp_now_init() == ESP_OK)
   {
@@ -97,14 +96,6 @@ bool get_SYSseen()
 void set_SYSseen(bool SYS)
 {
   SYSseen = SYS;
-}
-
-// gibt an, ob ein sendLokBuffer zu senden ist
-bool get_sendLokBuffer()
-{
-  bool tmp = bSendLokBuffer;
-  bSendLokBuffer = false;
-  return tmp;
 }
 
 // fordert einen Slave dazu auf, Anfangsdaten bekannt zu geben
@@ -230,6 +221,7 @@ void initVariant()
 // addiert und registriert gefundene Slaves
 void addSlaves()
 {
+  uint8_t Clntbuffer[CAN_FRAME_SIZE]; // buffer to hold incoming packet,
   macAddressesstruct macAddresses[maxSlaves];
   for (uint8_t s = 0; s < slaveCnt; s++)
   {
@@ -273,6 +265,10 @@ void addSlaves()
   }
   for (uint8_t s = 0; s < slaveCnt; s++)
   {
+    memcpy(&Clntbuffer, slaveInfo[s].slave.peer_addr, macLen);
+    // device-Nummer übermitteln
+    Clntbuffer[macLen] = s;
+    sendTheData(s, Clntbuffer, macLen + 1);
     printMac(slaveInfo[s].slave.peer_addr);
     char chs[30];
     sprintf(chs, " -- Added Slave %d\r\n", s + 1);
@@ -293,7 +289,7 @@ void registerSlaves()
     int sc = slaveCnt;
     sprintf(chs, "%d slave(s) found!\r\n", sc);
     displayLCD(chs);
-    delay(5000);
+    delay(500);
     clearDisplay();
   }
 }
@@ -347,6 +343,21 @@ void sendTheData(uint8_t slave, const uint8_t *data, size_t len)
   }
 }
 
+void setallSlavesAreReadyToZero()
+{
+  nbrSlavesAreReady = 0;
+}
+
+void incSlavesAreReadyToZero()
+{
+  nbrSlavesAreReady++;
+}
+
+uint8_t getallSlavesAreReady()
+{
+  return nbrSlavesAreReady;
+}
+
 // nach dem Versand von Meldungen können hier Fehlermeldungen abgerufen werden
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
@@ -356,6 +367,14 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
   memcpy(Clntbuffer, data, data_len);
+  if (data_len == macLen)
+  {
+  // Rückmeldung der slaves, nachdem sie ihre UID festgelegt haben
+  // mit nbrSlavesAreReady wird die Anzahl der Rückmeldungen gezählt
+    nbrSlavesAreReady++;
+    return;
+  }
+  log_e("OnDataRecv: %x", data[0x01]);
   switch (data[0x01])
   {
   case PING_R:
